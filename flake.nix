@@ -22,6 +22,8 @@
             rustToolchain
             pkgs.pkg-config
             pkgs.openssl
+            pkgs.nodejs_22
+            pkgs.nodePackages.npm
           ];
 
         };

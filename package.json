@@ -1,0 +1,19 @@
+{
+  "name": "sarvam",
+  "version": "1.0.0",
+  "description": "Sarvam AI CLI tool",
+  "main": "sarvam.js",
+  "bin": {
+    "sarvam": "./bin/sarvam.js"
+  },
+  "scripts": {
+    "start": "node sarvam.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "chalk": "^5.3.0",
+    "figlet": "^1.7.0",
+    "gradient-string": "^2.0.2",
+    "inquirer": "^8.2.6"
+  }
+}

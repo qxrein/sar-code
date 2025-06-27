@@ -2,3 +2,15 @@
 !.gitignore
 !*.nix
 !flake.lock
+
+!bin/
+!bin/*.js
+
+!lib/
+!lib/*.js
+
+!src/
+!src/components/
+!src/components/*.js
+
+!*.json
