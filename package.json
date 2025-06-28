@@ -1,19 +1,30 @@
 {
   "name": "sarvam",
   "version": "1.0.0",
-  "description": "Sarvam AI CLI tool",
-  "main": "sarvam.js",
+  "description": "Sarvam AI CLI tool - a lightweight alternative to Claude Code",
+  "main": "bin/sarvam.js",
   "bin": {
     "sarvam": "./bin/sarvam.js"
   },
   "scripts": {
-    "start": "node sarvam.js"
+    "start": "node bin/sarvam.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
     "axios": "^1.6.7",
     "chalk": "^5.3.0",
+    "commander": "^11.0.0",
     "figlet": "^1.7.0",
     "gradient-string": "^2.0.2",
     "inquirer": "^8.2.6"
-  }
+  },
+  "keywords": [
+    "sarvam",
+    "cli",
+    "ai",
+    "code",
+    "manipulation"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
 }

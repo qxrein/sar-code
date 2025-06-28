@@ -201,23 +201,29 @@ async function main() {
       return summary;
     }
 
+    // Only enrich the prompt with directory summary if the question needs project context
+    const projectContextKeywords = /\b(project|file|directory|structure|code|run|start|build|setup|create|modify|fix|update|readme|package|dependencies|install|configure)\b/i;
+    const needsProjectContext = projectContextKeywords.test(userInput) || 
+                               /how to run|how do i run|run this project|start this project|launch this project/i.test(userInput);
+    
     let enrichedPrompt = userInput;
-    if (/how to run|how do i run|run this project|start this project|launch this project/i.test(userInput)) {
+    if (needsProjectContext) {
       enrichedPrompt += '\n\n' + getDirectorySummary(currentCwd);
-      if (enrichedPrompt.length > 4000) {
-        console.log('Warning: The prompt is large (', enrichedPrompt.length, 'chars).');
-        const { proceed } = await inquirer.prompt([
-          {
-            type: 'confirm',
-            name: 'proceed',
-            message: 'The prompt is large and may be rejected by the API. Proceed anyway?',
-            default: false,
-          }
-        ]);
-        if (!proceed) {
-          console.log('Prompt not sent. Please reduce project size or simplify your request.');
-          continue;
+    }
+    
+    if (enrichedPrompt.length > 4000) {
+      console.log('Warning: The prompt is large (', enrichedPrompt.length, 'chars).');
+      const { proceed } = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'proceed',
+          message: 'The prompt is large and may be rejected by the API. Proceed anyway?',
+          default: false,
         }
+      ]);
+      if (!proceed) {
+        console.log('Prompt not sent. Please reduce project size or simplify your request.');
+        continue;
       }
     }
 
@@ -241,8 +247,19 @@ async function main() {
         if (!fs.existsSync(rootDir)) fs.mkdirSync(rootDir);
         treeLines.forEach(line => {
           const depth = (line.match(/^(\||├|└|─| )+/) || [''])[0].replace(/[^│├└─ ]/g, '').length;
-          const name = line.replace(/^(\||├|└|─| )+/, '').trim().replace(/\(.*\)/, '').trim();
-          if (!name) return;
+          // Clean up the name: remove tree characters, comments, extra spaces, and invalid characters
+          let name = line.replace(/^(\||├|└|─| )+/, '').trim();
+          // Remove comments (anything after #)
+          name = name.replace(/#.*$/, '').trim();
+          // Remove parentheses content
+          name = name.replace(/\(.*?\)/g, '').trim();
+          // Remove invalid characters for directory names
+          name = name.replace(/[<>:"|?*\x00-\x1f]/g, '').trim();
+          // Remove leading/trailing spaces and dots
+          name = name.replace(/^[.\s]+|[.\s]+$/g, '');
+          
+          if (!name || name.length === 0) return;
+          
           currentDirs = currentDirs.slice(0, depth + 1);
           const parent = currentDirs[currentDirs.length - 1];
           const fullPath = parent + '/' + name;
@@ -257,76 +274,81 @@ async function main() {
       }
     }
 
-    // Parse code blocks with filenames and write code to those files (always, after setup)
-    const codeBlockRegex = /```[\w\s=\.]*filename=([\w\/.]+)\n([\s\S]*?)```/g;
-    let codeBlockMatch;
-    while ((codeBlockMatch = codeBlockRegex.exec(sarvamResponse)) !== null) {
-      const filename = codeBlockMatch[1];
-      const code = codeBlockMatch[2];
-      fs.mkdirSync(path.join(currentCwd, path.dirname(filename)), { recursive: true });
-      fs.writeFileSync(path.join(currentCwd, filename), code);
-      console.log(`Wrote code to ${filename}`);
-    }
-    const createFileRegex = /Create [`']?([\w\/.]+)[`']?:\n```[\w\s=\.]*\n([\s\S]*?)```/g;
-    let createFileMatch;
-    while ((createFileMatch = createFileRegex.exec(sarvamResponse)) !== null) {
-      const filename = createFileMatch[1];
-      const code = createFileMatch[2];
-      fs.mkdirSync(path.join(currentCwd, path.dirname(filename)), { recursive: true });
-      fs.writeFileSync(path.join(currentCwd, filename), code);
-      console.log(`Wrote code to ${filename}`);
-    }
-    const commentFileRegex = /^\/\/\s*([\w\/.]+)\s*\n```[\w\s=\.]*\n([\s\S]*?)```/gm;
-    let commentFileMatch;
-    while ((commentFileMatch = commentFileRegex.exec(sarvamResponse)) !== null) {
-      const filename = commentFileMatch[1];
-      const code = commentFileMatch[2];
-      fs.mkdirSync(path.join(currentCwd, path.dirname(filename)), { recursive: true });
-      fs.writeFileSync(path.join(currentCwd, filename), code);
-      console.log(`Wrote code to ${filename}`);
+    // Only consider code blocks for file overwrite if they look like full files or the user asked for file manipulation
+    const fileActionKeywords = /\b(create|update|write|fix|replace|edit|overwrite)\b|\.\w{1,6}/i;
+    const userIntent = fileActionKeywords.test(userInput) || fileActionKeywords.test(sarvamResponse);
+
+    // Track processed filenames to avoid duplicate prompts
+    const processedFiles = new Set();
+
+    const genericBlocksAll = [...sarvamResponse.matchAll(/```(?:[\w\s=\.]*)?\n([\s\S]*?)```/g)];
+    for (const block of genericBlocksAll) {
+      const code = block[1].trim();
+      // Heuristics for default filename suggestion
+      let defaultName = '';
+      if (code.startsWith('#')) defaultName = 'README.md';
+      else if (code.startsWith('{')) defaultName = 'package.json';
+      else if (code.startsWith('<!DOCTYPE html>') || code.startsWith('<html')) defaultName = 'index.html';
+      else if (code.startsWith('import') || code.startsWith('export') || code.includes('React')) defaultName = 'index.js';
+
+      // Only prompt if user intent is file manipulation or code block is large
+      if (userIntent || code.length > 200 || code.split('\n').length > 10) {
+        const { confirm, filename } = await inquirer.prompt([
+          {
+            type: 'input',
+            name: 'filename',
+            message: 'Detected possible file content. Enter filename to overwrite (leave blank to skip):',
+            default: defaultName,
+          },
+          {
+            type: 'confirm',
+            name: 'confirm',
+            message: answers => answers.filename ? `Overwrite ${answers.filename} with this content?` : 'Skip?',
+            default: false,
+            when: answers => !!answers.filename,
+          }
+        ]);
+        if (confirm && filename && !processedFiles.has(filename)) {
+          processedFiles.add(filename);
+          fs.mkdirSync(path.join(currentCwd, path.dirname(filename)), { recursive: true });
+          fs.writeFileSync(path.join(currentCwd, filename), code);
+          console.log(`Wrote code to ${filename}`);
+        }
+      }
     }
 
-    // Detect OS and shell
-    const platform = process.platform; // 'linux', 'darwin', 'win32'
-    const shell = process.env.SHELL || process.env.ComSpec || '';
-    let preferredShell = 'bash';
-    if (platform === 'win32') preferredShell = 'cmd';
-
-    // Extract relevant command from Sarvam's response
-    let commandToRun = null;
     const shellCommands = [
       'mkdir', 'ls', 'find', 'cat', 'echo', 'touch', 'cp', 'mv', 'rm', 'npx', 'node', 'npm', 'yarn', 'python', 'pip', 'cargo', 'nu', 'bash', 'sh', 'cd', 'dir', 'copy', 'del', 'type', 'cls', 'move', 'rmdir', 'powershell'
     ];
+    let commandsToRun = [];
+
     if (typeof sarvamResponse === 'string') {
-      const codeBlocks = [...sarvamResponse.matchAll(/```(\w+)?\n([\s\S]*?)```/g)];
-      let found = false;
+      // Extract from code blocks
+      const codeBlocks = [...sarvamResponse.matchAll(/```(?:bash|sh|zsh)?\\n([\\s\\S]*?)```/g)];
       for (const block of codeBlocks) {
-        const lang = (block[1] || '').toLowerCase();
-        const code = block[2].trim();
-        const firstLine = code.split('\n')[0].trim();
-        if (((preferredShell === 'bash' && (lang === 'bash' || lang === 'sh' || lang === 'zsh' || lang === '')) ||
-            (preferredShell === 'cmd' && (lang === 'cmd' || lang === 'powershell' || lang === 'bat')))
-          && shellCommands.some(cmd => firstLine.startsWith(cmd + ' '))) {
-          commandToRun = firstLine;
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        const lines = sarvamResponse.split('\n');
+        const lines = block[1].split('\\n').map(l => l.trim()).filter(Boolean);
         for (const line of lines) {
-          const trimmed = line.trim();
-          if (shellCommands.some(cmd => trimmed.startsWith(cmd + ' '))) {
-            commandToRun = trimmed;
-            break;
+          if (shellCommands.some(cmd => line.startsWith(cmd + ' '))) {
+            commandsToRun.push(line);
           }
         }
       }
+      const lines = sarvamResponse.split('\\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (shellCommands.some(cmd => trimmed.startsWith(cmd + ' '))) {
+          commandsToRun.push(trimmed);
+        }
+      }
     }
-    if (commandToRun) {
-      const cdMatch = commandToRun.match(/^cd\s+(.+)/);
-      if (cdMatch) {
-        const newDir = cdMatch[1].trim();
+
+    // Remove duplicates and keep order
+    commandsToRun = [...new Set(commandsToRun)];
+
+    // Execute all commands sequentially
+    for (const commandToRun of commandsToRun) {
+      if (commandToRun.startsWith('cd ')) {
+        const newDir = commandToRun.slice(3).trim();
         currentCwd = path.isAbsolute(newDir) ? newDir : path.join(currentCwd, newDir);
         console.log(`Changed directory to: ${currentCwd}`);
         continue;
@@ -347,16 +369,19 @@ async function main() {
       } else {
         console.log(`[Trusted mode] Running: ${commandToRun}`);
       }
-      exec(commandToRun, { cwd: currentCwd }, (error, stdout, stderr) => {
-        if (error) {
-          console.log(`Error: ${error.message}`);
-        }
-        if (stdout) {
-          console.log(`Output:\n${stdout}`);
-        }
-        if (stderr) {
-          console.log(`Error output:\n${stderr}`);
-        }
+      await new Promise((resolve) => {
+        exec(commandToRun, { cwd: currentCwd }, (error, stdout, stderr) => {
+          if (error) {
+            console.log(`Error: ${error.message}`);
+          }
+          if (stdout) {
+            console.log(`Output:\\n${stdout}`);
+          }
+          if (stderr) {
+            console.log(`Error output:\\n${stderr}`);
+          }
+          resolve();
+        });
       });
     }
   }

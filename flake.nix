@@ -1,5 +1,5 @@
 {
-  description = "Mistral TUI";
+  description = "Sarvam CLI";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
